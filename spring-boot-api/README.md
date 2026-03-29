@@ -67,3 +67,47 @@ curl -s -X POST http://localhost:8081/api/v1/chat/completions \
   -d '{"model":"bitnet-b1.58","messages":[]}' \
   | python3 -m json.tool
 ```
+
+---
+
+## Real Query Examples
+
+The mock sidecar always returns a hardcoded response — that is fine. These queries verify the full request pipeline: validation, routing to `localhost:8080`, and response serialization.
+
+**Simple question:**
+```bash
+curl -s -X POST http://localhost:8081/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bitnet-b1.58",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "max_tokens": 100,
+    "temperature": 0.7
+  }' | python3 -m json.tool
+```
+
+**Multi-turn conversation** (system prompt + user message):
+```bash
+curl -s -X POST http://localhost:8081/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bitnet-b1.58",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant that answers concisely."},
+      {"role": "user", "content": "Explain Kubernetes in one sentence."}
+    ],
+    "max_tokens": 150,
+    "temperature": 0.3
+  }' | python3 -m json.tool
+```
+
+**Validation failure — missing messages** (expects HTTP 400):
+```bash
+curl -v -X POST http://localhost:8081/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "bitnet-b1.58", "messages": []}'
+```
+
+**Sidecar down test** — stop Terminal 1 (the Python mock), then send any request. Expects HTTP 503 Service Unavailable.
