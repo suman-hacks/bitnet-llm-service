@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bitnet-model-pvc
+  namespace: default
+  labels:
+    app: bitnet-llm
+spec:
+  accessModes:
+    - ReadOnlyMany        # Multiple Pods can read; no Pod writes to this volume
+  resources:
+    requests:
+      storage: 10Gi       # Enough for the 3B model (~700 MB) with room to grow
+
+  # ── Storage class ───────────────────────────────────────────────────────────
+  # Replace with the storage class available on your on-prem cluster.
+  # Common options:
+  #   nfs-client      — NFS-backed storage (most common on-prem)
+  #   local-path      — Rancher local-path-provisioner (single-node or dev)
+  #   ceph-rbd        — Ceph block storage
+  # Leave commented out to use the cluster's default storage class.
+  #
+  # storageClassName: nfs-client

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bitnet-llm-service
+  namespace: default
+  labels:
+    app: bitnet-llm
+spec:
+  type: ClusterIP
+
+  selector:
+    app: bitnet-llm
+
+  ports:
+    - name: api
+      port: 80            # Cluster-internal port clients call (clean, no port number needed)
+      targetPort: 8081    # Routes to the Spring Boot container only
+      protocol: TCP
+
+  # Port 8080 (BitNet.cpp sidecar) is intentionally absent.
+  # It is bound to 127.0.0.1 inside the Pod and is unreachable from the cluster.

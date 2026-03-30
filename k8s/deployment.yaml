@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bitnet-llm
+  namespace: default
+  labels:
+    app: bitnet-llm
+spec:
+  # CPU inference is heavy — run a single replica unless you have multiple
+  # high-core-count nodes and want to scale out independently.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bitnet-llm
+  template:
+    metadata:
+      labels:
+        app: bitnet-llm
+    spec:
+
+      # ── Shared Volume ───────────────────────────────────────────────────────
+      volumes:
+        - name: model-weights
+          persistentVolumeClaim:
+            claimName: bitnet-model-pvc
+            readOnly: true
+
+      # ── Containers ──────────────────────────────────────────────────────────
+      containers:
+
+        # ── Container 1: BitNet.cpp AI Inference Sidecar ──────────────────────
+        - name: bitnet-sidecar
+          # TODO: replace with your private registry path after pushing the image.
+          # Build: docker build -f bitnet-sidecar/Dockerfile.bitnet -t your-registry/bitnet-sidecar:latest .
+          image: your-registry/bitnet-sidecar:latest
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              # Not exposed via the Service — Pod-internal only.
+              protocol: TCP
+
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+              readOnly: true
+
+          env:
+            - name: MODEL_DIR
+              value: /models
+            - name: SERVER_HOST
+              value: "127.0.0.1"
+            - name: SERVER_PORT
+              value: "8080"
+            # Allocate the bulk of CPU threads to inference.
+            # Set to match the CPU limit below (e.g. "6" if limit is 6000m).
+            - name: THREADS
+              value: "6"
+            - name: CTX_SIZE
+              value: "2048"
+
+          resources:
+            requests:
+              cpu: "4000m"    # 4 cores — minimum viable for 3B CPU inference
+              memory: "6Gi"
+            limits:
+              cpu: "6000m"    # 6 cores — bulk of the Pod's CPU budget
+              memory: "10Gi"
+
+          # startupProbe allows extra time for the model to load before liveness
+          # checks begin. Gives up to 10s * 30 attempts = 5 minutes.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+        # ── Container 2: Spring Boot API ──────────────────────────────────────
+        - name: spring-boot-api
+          # TODO: replace with your private registry path after pushing the image.
+          # Build: docker build -f spring-boot-api/Dockerfile -t your-registry/bitnet-api:latest .
+          image: your-registry/bitnet-api:latest
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8081
+              protocol: TCP
+
+          env:
+            - name: BITNET_SIDECAR_URL
+              value: "http://localhost:8080"
+
+          resources:
+            requests:
+              cpu: "250m"     # 0.25 cores — API routing is lightweight
+              memory: "512Mi"
+            limits:
+              cpu: "500m"     # 0.5 cores
+              memory: "768Mi"
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
