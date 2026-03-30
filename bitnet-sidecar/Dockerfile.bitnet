@@ -1,0 +1,75 @@
+# ─── Stage 1: Builder ────────────────────────────────────────────────────────
+# Full build environment — compiles the BitNet.cpp engine from source.
+# Nothing from this stage ships in the final image except the compiled binaries.
+FROM ubuntu:22.04 AS builder
+
+# Prevent apt from blocking on interactive timezone/locale prompts.
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    python3 \
+    python3-pip \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Clone Microsoft BitNet with --recursive to pull in llama.cpp as a submodule.
+# llama.cpp provides the HTTP server and GGUF runtime; BitNet adds 1.58-bit kernels.
+RUN git clone --recursive https://github.com/microsoft/BitNet.git .
+
+# Install Python dependencies (used by setup_env.py for model conversion).
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Build the inference engine with CPU-native optimisations.
+#   -DLLAMA_NATIVE=ON     — emit AVX2/NEON instructions for the host CPU family
+#   -DCMAKE_BUILD_TYPE=Release — optimised binary, no debug symbols
+#   -j$(nproc)            — parallelise across all available build cores
+RUN cmake -B build \
+        -DLLAMA_NATIVE=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j$(nproc)
+
+
+# ─── Stage 2: Runtime ────────────────────────────────────────────────────────
+# Minimal runtime image — only the compiled binaries, Python helpers, and libc.
+FROM ubuntu:22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    # libgomp: OpenMP runtime required by the BitNet CPU kernels
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Compiled server binary and quantisation tool from the builder stage.
+COPY --from=builder /build/build/bin/llama-server   ./bin/llama-server
+COPY --from=builder /build/build/bin/llama-quantize ./bin/llama-quantize
+
+# Python scripts and utilities needed for .safetensors → GGUF conversion.
+COPY --from=builder /build/setup_env.py   .
+COPY --from=builder /build/requirements.txt .
+COPY --from=builder /build/utils/         ./utils/
+
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Model weights are NOT baked into the image (they are multi-GB).
+# Mount a host directory or a Kubernetes PersistentVolume at /models at runtime.
+VOLUME ["/models"]
+
+# Entrypoint script handles model discovery and server launch.
+COPY start.sh .
+RUN chmod +x start.sh
+
+# Port 8080 is intentionally bound to 127.0.0.1 only inside the Pod.
+# It is never exposed to the cluster — only the Spring Boot sidecar on 8081 is.
+EXPOSE 8080
+
+ENTRYPOINT ["./start.sh"]
