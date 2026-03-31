@@ -13,11 +13,12 @@ No GPU required. No internet dependency at runtime. Fully OpenAI-API-compatible.
 3. [Component 1 — BitNet.cpp AI Inference Sidecar](#3-component-1--bitnetcpp-ai-inference-sidecar)
 4. [Component 2 — Spring Boot API](#4-component-2--spring-boot-api)
 5. [Component 3 — Kubernetes Orchestration](#5-component-3--kubernetes-orchestration)
-6. [Request Flow](#6-request-flow)
-7. [Repository Structure](#7-repository-structure)
-8. [Deployment Guide](#8-deployment-guide)
-9. [Local Testing](#9-local-testing)
-10. [Configuration Reference](#10-configuration-reference)
+6. [Component 4 — Web UI (Open WebUI)](#6-component-4--web-ui-open-webui)
+7. [Request Flow](#7-request-flow)
+8. [Repository Structure](#8-repository-structure)
+9. [Deployment Guide](#9-deployment-guide)
+10. [Local Testing](#10-local-testing)
+11. [Configuration Reference](#11-configuration-reference)
 
 ---
 
@@ -40,48 +41,63 @@ designed for:
 ### High-Level Cluster View
 
 ```
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │                    Kubernetes Cluster  (On-Prem / Air-Gapped)        │
-  │                                                                       │
-  │   In-cluster clients (other services, ingress controllers, etc.)     │
-  │           │                                                           │
-  │           │  HTTP  POST /api/v1/chat/completions                     │
-  │           ▼                                                           │
-  │   ┌───────────────────────┐                                          │
-  │   │   ClusterIP Service   │  port 80  →  targetPort 8081            │
-  │   │   bitnet-llm-service  │  (port 8080 is NOT listed here)         │
-  │   └──────────┬────────────┘                                          │
-  │              │                                                        │
-  │              ▼                                                        │
-  │   ┌──────────────────────────────────────────────────────────┐      │
-  │   │                     Pod: bitnet-llm                       │      │
-  │   │                                                           │      │
-  │   │   ┌─────────────────────────┐   localhost:8080           │      │
-  │   │   │   Container 2           │ ─────────────────────────▶ │      │
-  │   │   │   Spring Boot API       │                             │      │
-  │   │   │   Java 17  |  port 8081 │ ◀─────────────────────────┤      │
-  │   │   │                         │   OpenAI-compatible JSON   │      │
-  │   │   │   • REST Controller     │                             │      │
-  │   │   │   • Request Validation  │   ┌─────────────────────┐  │      │
-  │   │   │   • HTTP Client         │   │   Container 1        │  │      │
-  │   │   │   • Error Handling      │   │   BitNet.cpp Sidecar │  │      │
-  │   │   └─────────────────────────┘   │   C++  |  port 8080  │  │      │
-  │   │                                 │   127.0.0.1 only     │  │      │
-  │   │                                 │                       │  │      │
-  │   │                                 │   • llama-server      │  │      │
-  │   │                                 │   • 1.58-bit kernels  │  │      │
-  │   │                                 │   • CPU-only (6 cores)│  │      │
-  │   │                                 └──────────┬────────────┘  │      │
-  │   │                                            │               │      │
-  │   │                                            │ /models       │      │
-  │   │                                            ▼               │      │
-  │   │                                 ┌──────────────────────┐   │      │
-  │   │                                 │  PersistentVolume    │   │      │
-  │   │                                 │  model weights       │   │      │
-  │   │                                 │  (.gguf / .safetens) │   │      │
-  │   │                                 └──────────────────────┘   │      │
-  │   └──────────────────────────────────────────────────────────┘      │
-  └──────────────────────────────────────────────────────────────────────┘
+  Office Network
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Browser  ──── http://<node-ip>:30080 ────────────────────────────────────▶ │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                          │
+  ┌───────────────────────────────────────┼─────────────────────────────────────┐
+  │           Kubernetes Cluster  (On-Prem / Air-Gapped)                        │
+  │                                       │                                      │
+  │           ┌───────────────────────────▼──────────────┐                      │
+  │           │   NodePort Service : open-webui-service   │  port 30080          │
+  │           └───────────────────────────┬──────────────┘                      │
+  │                                       │                                      │
+  │           ┌───────────────────────────▼──────────────┐                      │
+  │           │   Pod: open-webui                         │                      │
+  │           │   Open WebUI  |  port 8080                │                      │
+  │           │   • Browser chat interface                │                      │
+  │           │   • Chat history  (PVC: open-webui-pvc)   │                      │
+  │           │   • User accounts                         │                      │
+  │           └───────────────────────────┬──────────────┘                      │
+  │                                       │                                      │
+  │                  http://bitnet-llm-service/api/v1/chat/completions           │
+  │                                       │                                      │
+  │   In-cluster clients ─────────────────┤                                      │
+  │   (other services, curl, scripts)     │                                      │
+  │                                       ▼                                      │
+  │           ┌──────────────────────────────────────┐                          │
+  │           │   ClusterIP Service                   │  port 80 → 8081          │
+  │           │   bitnet-llm-service                  │  (8080 not exposed)      │
+  │           └──────────────────────┬───────────────┘                          │
+  │                                  │                                           │
+  │           ┌──────────────────────▼───────────────────────────────────┐      │
+  │           │                  Pod: bitnet-llm                          │      │
+  │           │                                                           │      │
+  │           │   ┌─────────────────────────┐   localhost:8080           │      │
+  │           │   │   Container 2           │ ────────────────────────▶  │      │
+  │           │   │   Spring Boot API       │                             │      │
+  │           │   │   Java 17  |  port 8081 │ ◀────────────────────────  │      │
+  │           │   │                         │   OpenAI-compatible JSON   │      │
+  │           │   │   • REST Controller     │                             │      │
+  │           │   │   • Request Validation  │   ┌─────────────────────┐  │      │
+  │           │   │   • HTTP Client         │   │   Container 1        │  │      │
+  │           │   │   • Error Handling      │   │   BitNet.cpp Sidecar │  │      │
+  │           │   └─────────────────────────┘   │   C++  |  port 8080  │  │      │
+  │           │                                 │   127.0.0.1 only     │  │      │
+  │           │                                 │   • llama-server     │  │      │
+  │           │                                 │   • 1.58-bit kernels │  │      │
+  │           │                                 │   • CPU-only, 6 cores│  │      │
+  │           │                                 └──────────┬───────────┘  │      │
+  │           │                                            │ /models       │      │
+  │           │                                            ▼               │      │
+  │           │                                 ┌──────────────────────┐   │      │
+  │           │                                 │  PersistentVolume    │   │      │
+  │           │                                 │  model weights       │   │      │
+  │           │                                 │  (bitnet-model-pvc)  │   │      │
+  │           │                                 └──────────────────────┘   │      │
+  │           └──────────────────────────────────────────────────────────┘      │
+  └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why the Sidecar Pattern?
@@ -154,7 +170,7 @@ effectively invisible to the rest of the cluster — only the Spring Boot API is
 ```
   start.sh
       │
-      ├── Read env vars (MODEL_DIR, SERVER_HOST, SERVER_PORT, THREADS, CTX_SIZE)
+      ├── Read env vars (MODEL_DIR, SERVER_HOST, SERVER_PORT, THREADS, CTX_SIZE, PARALLEL)
       │
       ├── Find .gguf file in $MODEL_DIR?
       │       │
@@ -176,10 +192,10 @@ effectively invisible to the rest of the cluster — only the Spring Boot API is
               --model       $GGUF_FILE
               --host        127.0.0.1    ← Pod-internal only
               --port        8080
-              --ctx-size    2048
+              --ctx-size    4096
               --threads     6
               --n-gpu-layers 0           ← CPU-only
-              --parallel    1            ← one request at a time
+              --parallel    2            ← 2 concurrent requests
 ```
 
 ### download_model.sh — Admin Setup Script
@@ -298,9 +314,10 @@ chmod +x bitnet-sidecar/download_model.sh
 
 ```
   k8s/
-  ├── pvc.yaml         ← PersistentVolumeClaim for model weights
-  ├── deployment.yaml  ← Pod definition with both containers
-  └── service.yaml     ← ClusterIP exposing only port 8081
+  ├── pvc.yaml           ← PersistentVolumeClaim for model weights
+  ├── deployment.yaml    ← Pod definition with both containers
+  ├── service.yaml       ← ClusterIP exposing only port 8081
+  └── open-webui.yaml    ← Open WebUI PVC + Deployment + NodePort Service
 ```
 
 ### pvc.yaml
@@ -358,7 +375,55 @@ chmod +x bitnet-sidecar/download_model.sh
 
 ---
 
-## 6. Request Flow
+## 6. Component 4 — Web UI (Open WebUI)
+
+**Location:** `k8s/open-webui.yaml`
+
+Open WebUI is a browser-based chat interface that connects to the Spring Boot API as an
+OpenAI-compatible backend. Users on the office network open it in a browser — no API knowledge
+or curl commands required.
+
+### What's inside open-webui.yaml
+
+```
+  open-webui.yaml contains three objects:
+  ┌──────────────────────────────────────────────────────────┐
+  │  1. PVC: open-webui-pvc  (2Gi, ReadWriteOnce)            │
+  │     Stores SQLite chat history, user accounts, uploads   │
+  ├──────────────────────────────────────────────────────────┤
+  │  2. Deployment: open-webui                               │
+  │     Image : ghcr.io/open-webui/open-webui:main           │
+  │     Port  : 8080                                         │
+  │                                                          │
+  │     Key env vars:                                        │
+  │       OPENAI_API_BASE_URLS                               │
+  │         → http://bitnet-llm-service/api/v1               │
+  │       DEFAULT_MODELS  → bitnet-b1.58                     │
+  │       WEBUI_AUTH      → True  (user login enabled)       │
+  │       WEBUI_SECRET_KEY → set before deploying            │
+  │       ENABLE_OLLAMA_API → False                          │
+  ├──────────────────────────────────────────────────────────┤
+  │  3. Service: open-webui-service  (NodePort)              │
+  │     port 8080  →  nodePort 30080                         │
+  │     Accessible at http://<any-node-ip>:30080             │
+  └──────────────────────────────────────────────────────────┘
+```
+
+### Resource Allocation
+
+| Resource | Request | Limit |
+|---|---|---|
+| CPU | 250m | 500m |
+| Memory | 512Mi | 1Gi |
+
+### First-Time Login
+
+When you open `http://<node-ip>:30080` for the first time, Open WebUI will prompt you to
+create an admin account. The first account registered automatically becomes the admin.
+
+---
+
+## 7. Request Flow
 
 ```
   In-cluster client
@@ -429,7 +494,7 @@ chmod +x bitnet-sidecar/download_model.sh
 
 ---
 
-## 7. Repository Structure
+## 8. Repository Structure
 
 ```
   bitnet-llm-service/
@@ -461,15 +526,16 @@ chmod +x bitnet-sidecar/download_model.sh
   │       │       └── Usage.java
   │       └── resources/application.properties
   │
-  └── k8s/                         ── COMPONENT 3 ──
-      ├── pvc.yaml                 ← PersistentVolumeClaim (10Gi, ReadOnlyMany)
+  └── k8s/                         ── COMPONENTS 3 & 4 ──
+      ├── pvc.yaml                 ← PersistentVolumeClaim (10Gi, ReadOnlyMany) for model
       ├── deployment.yaml          ← Pod with both containers + resource limits
-      └── service.yaml             ← ClusterIP, port 80 → 8081 only
+      ├── service.yaml             ← ClusterIP, port 80 → 8081 only
+      └── open-webui.yaml          ← Open WebUI PVC + Deployment + NodePort Service (:30080)
 ```
 
 ---
 
-## 8. Deployment Guide
+## 9. Deployment Guide
 
 ### Prerequisites
 
@@ -519,7 +585,7 @@ docker push your-registry/bitnet-api:latest
 
 ---
 
-### Step 3 — Update image references in deployment.yaml
+### Step 3 — Update placeholders before deploying
 
 In `k8s/deployment.yaml`, replace the two placeholder image names:
 
@@ -531,23 +597,32 @@ image: your-registry/bitnet-sidecar:latest
 image: your-registry/bitnet-api:latest
 ```
 
-Also set `storageClassName` in `k8s/pvc.yaml` to match your cluster's storage provisioner.
+In `k8s/open-webui.yaml`, set a real secret key:
+
+```yaml
+# Generate with: openssl rand -hex 32
+- name: WEBUI_SECRET_KEY
+  value: "change-me-to-a-random-secret"
+```
+
+Also set `storageClassName` in both `k8s/pvc.yaml` and `k8s/open-webui.yaml` to match
+your cluster's storage provisioner.
 
 ---
 
 ### Step 4 — Deploy to Kubernetes
 
 ```bash
-# 1. Provision storage
+# 1. Provision storage for model weights
 kubectl apply -f k8s/pvc.yaml
 
 # 2. Verify PVC is Bound before proceeding
 kubectl get pvc bitnet-model-pvc
 
-# 3. Deploy the application
+# 3. Deploy the LLM application
 kubectl apply -f k8s/deployment.yaml
 
-# 4. Expose the service
+# 4. Expose the internal API service
 kubectl apply -f k8s/service.yaml
 
 # 5. Watch the Pod come up (sidecar takes 1–5 min to load model)
@@ -556,13 +631,32 @@ kubectl get pods -l app=bitnet-llm -w
 
 ---
 
-### Step 5 — Verify
+### Step 5 — Deploy the Web UI
 
 ```bash
-# Check both containers are Running
-kubectl describe pod -l app=bitnet-llm
+# Deploy Open WebUI (PVC + Deployment + NodePort Service in one file)
+kubectl apply -f k8s/open-webui.yaml
 
-# Send a test request from inside the cluster
+# Watch it come up
+kubectl get pods -l app=open-webui -w
+```
+
+Once running, open a browser and navigate to:
+```
+http://<any-kubernetes-node-ip>:30080
+```
+
+Create your admin account on first visit. The model `bitnet-b1.58` will be pre-selected.
+
+---
+
+### Step 6 — Verify
+
+```bash
+# Check all Pods are Running
+kubectl get pods -l 'app in (bitnet-llm, open-webui)'
+
+# API smoke test from inside the cluster
 kubectl run curl-test --image=curlimages/curl --rm -it --restart=Never -- \
   curl -s -X POST http://bitnet-llm-service/api/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -571,7 +665,7 @@ kubectl run curl-test --image=curlimages/curl --rm -it --restart=Never -- \
 
 ---
 
-## 9. Local Testing
+## 10. Local Testing
 
 See [spring-boot-api/README.md](spring-boot-api/README.md) for the full local testing guide
 using a Python mock sidecar. Summary:
@@ -603,7 +697,7 @@ curl -s -X POST http://localhost:8081/api/v1/chat/completions \
 
 ---
 
-## 10. Configuration Reference
+## 11. Configuration Reference
 
 ### BitNet Sidecar — Environment Variables
 
@@ -613,7 +707,8 @@ curl -s -X POST http://localhost:8081/api/v1/chat/completions \
 | `SERVER_HOST` | `127.0.0.1` | Bind address (never change in production) |
 | `SERVER_PORT` | `8080` | Port for the inference server |
 | `THREADS` | `$(nproc)` | CPU threads allocated to inference |
-| `CTX_SIZE` | `2048` | Context window size in tokens |
+| `CTX_SIZE` | `4096` | Context window size in tokens |
+| `PARALLEL` | `2` | Max concurrent inference requests |
 
 ### Spring Boot API — application.properties
 
@@ -628,3 +723,15 @@ curl -s -X POST http://localhost:8081/api/v1/chat/completions \
 |---|---|---|---|
 | `bitnet-sidecar` | 4 cores | 6 cores | 10 Gi |
 | `spring-boot-api` | 0.25 cores | 0.5 cores | 768 Mi |
+| `open-webui` | 0.25 cores | 0.5 cores | 1 Gi |
+
+### Open WebUI — Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_BASE_URLS` | `http://bitnet-llm-service/api/v1` | Spring Boot API endpoint |
+| `OPENAI_API_KEYS` | `not-required` | Dummy value — API has no auth |
+| `DEFAULT_MODELS` | `bitnet-b1.58` | Pre-selected model in the UI |
+| `WEBUI_AUTH` | `True` | User login enabled |
+| `WEBUI_SECRET_KEY` | *(must set)* | Session signing key — use `openssl rand -hex 32` |
+| `ENABLE_OLLAMA_API` | `False` | Ollama integration disabled |

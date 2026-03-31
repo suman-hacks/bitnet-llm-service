@@ -1,0 +1,147 @@
+# ── Open WebUI — Web Chat Interface ──────────────────────────────────────────
+#
+# Deploys the Open WebUI browser-based chat interface and connects it to the
+# BitNet Spring Boot API as an OpenAI-compatible backend.
+#
+# Apply:  kubectl apply -f k8s/open-webui.yaml
+# Access: http://<any-node-ip>:30080
+#
+# Three objects in this file:
+#   1. PersistentVolumeClaim  — stores chat history, user accounts, uploads
+#   2. Deployment             — the Open WebUI container
+#   3. Service (NodePort)     — exposes the UI to browsers on the office network
+
+
+# ── 1. PersistentVolumeClaim ─────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-pvc
+  namespace: default
+  labels:
+    app: open-webui
+spec:
+  accessModes:
+    - ReadWriteOnce       # Only one Pod writes chat history / user data at a time
+  resources:
+    requests:
+      storage: 2Gi        # SQLite database + file uploads
+
+  # Set to your cluster's storage class (same as bitnet-model-pvc).
+  # storageClassName: nfs-client
+
+
+---
+# ── 2. Deployment ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: default
+  labels:
+    app: open-webui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+
+      volumes:
+        - name: webui-data
+          persistentVolumeClaim:
+            claimName: open-webui-pvc
+
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:main
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+
+          volumeMounts:
+            - name: webui-data
+              mountPath: /app/backend/data   # SQLite DB + uploaded files
+
+          env:
+            # ── Backend connection ─────────────────────────────────────────
+            # Points Open WebUI at the Spring Boot API as its OpenAI provider.
+            # Open WebUI appends /chat/completions — resolves to:
+            #   http://bitnet-llm-service/api/v1/chat/completions
+            - name: OPENAI_API_BASE_URLS
+              value: "http://bitnet-llm-service/api/v1"
+
+            # No API key required — the Spring Boot API runs without auth.
+            - name: OPENAI_API_KEYS
+              value: "not-required"
+
+            # ── UI defaults ────────────────────────────────────────────────
+            # Pre-select the BitNet model in the model picker.
+            - name: DEFAULT_MODELS
+              value: "bitnet-b1.58"
+
+            # Keep user authentication enabled (recommended for shared clusters).
+            # Set to "False" only for single-user / dev environments.
+            - name: WEBUI_AUTH
+              value: "True"
+
+            # TODO: replace with a long random string before deploying.
+            # Generate one with: openssl rand -hex 32
+            - name: WEBUI_SECRET_KEY
+              value: "change-me-to-a-random-secret"
+
+            # Disable Open WebUI's built-in Ollama integration — not needed here.
+            - name: ENABLE_OLLAMA_API
+              value: "False"
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+
+---
+# ── 3. Service (NodePort) ─────────────────────────────────────────────────────
+# NodePort makes the UI reachable from any browser on the office network.
+# Access via:  http://<any-k8s-node-ip>:30080
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui-service
+  namespace: default
+  labels:
+    app: open-webui
+spec:
+  type: NodePort
+  selector:
+    app: open-webui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080    # Fixed port — easy to bookmark and firewall-rule
+      protocol: TCP
