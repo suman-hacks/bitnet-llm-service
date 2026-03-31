@@ -11,22 +11,25 @@
 #   MODEL_DIR    Path to the directory containing model weights.  [/models]
 #   SERVER_HOST  Address to bind the HTTP server to.              [127.0.0.1]
 #   SERVER_PORT  Port for the HTTP server.                        [8080]
-#   CTX_SIZE     Context window size in tokens.                   [2048]
+#   CTX_SIZE     Context window size in tokens.                   [4096]
 #   THREADS      Number of CPU threads for inference.             [$(nproc)]
+#   PARALLEL     Max concurrent inference requests.               [2]
 
 set -euo pipefail
 
 MODEL_DIR="${MODEL_DIR:-/models}"
 SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
 SERVER_PORT="${SERVER_PORT:-8080}"
-CTX_SIZE="${CTX_SIZE:-2048}"
+CTX_SIZE="${CTX_SIZE:-4096}"
 THREADS="${THREADS:-$(nproc)}"
+PARALLEL="${PARALLEL:-2}"
 
 echo "[sidecar] Starting BitNet inference sidecar..."
 echo "[sidecar] Model directory : $MODEL_DIR"
 echo "[sidecar] Bind address     : $SERVER_HOST:$SERVER_PORT"
 echo "[sidecar] Context size     : $CTX_SIZE tokens"
 echo "[sidecar] CPU threads      : $THREADS"
+echo "[sidecar] Parallel slots   : $PARALLEL"
 
 # ── Step 1: Locate model file ─────────────────────────────────────────────────
 
@@ -77,6 +80,6 @@ exec ./bin/llama-server \
     --ctx-size     "$CTX_SIZE" \
     --threads      "$THREADS" \
     --n-gpu-layers 0 \
-    --parallel     1
+    --parallel     "$PARALLEL"
     # --n-gpu-layers 0  : CPU-only inference (no CUDA/Metal)
-    # --parallel     1  : one concurrent request at a time (CPU budget)
+    # --parallel        : concurrent request slots (set via PARALLEL env var)

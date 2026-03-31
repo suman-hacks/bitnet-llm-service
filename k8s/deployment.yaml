@@ -57,7 +57,9 @@ spec:
             - name: THREADS
               value: "6"
             - name: CTX_SIZE
-              value: "2048"
+              value: "4096"   # 4096 tokens: double the previous window, ~1.3 GB KV cache per slot
+            - name: PARALLEL
+              value: "2"      # 2 concurrent requests: 3 cores each, ~3.2 GB total memory footprint
 
           resources:
             requests:
